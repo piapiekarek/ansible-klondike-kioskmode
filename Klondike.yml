@@ -1,0 +1,179 @@
+## Tested with Debian 9 and Raspbian Stretch
+---
+- name: Configuration for digital-signage
+  hosts: all
+  vars:
+    user: pi
+    hostname: digital-signage
+    kiosk_url: "http://coffee.42volt.de"
+    wifi_ssid: "Unifi_FP"
+    wifi_password: "testxamax"
+    
+    ansible_become: yes
+    ansible_become_method: su
+    ansible_become_pass: raspberry
+    ansible_python_interpreter: /usr/bin/python3
+  
+  remote_user: "{{ user }}"
+  tasks:
+    # - debug: var=ansible_facts
+    - name: Set Hostname to {{ hostname }}
+      hostname:
+        name: "{{ hostname }}"
+
+    - name: Update and upgrade apt packages 
+      apt:
+        upgrade: yes
+        update_cache: yes
+        cache_valid_time: 86400 #One day
+
+#########################################################################################
+# Aisleriot
+
+    - name: Install aisleriot
+      apt:
+        name: 
+          - aisleriot
+        state: latest
+
+#########################################################################################
+
+    - name: Install unclutter
+      apt:
+        name: 
+          - unclutter 
+        state: latest
+
+    - name: Install x11-xserver-utils
+      apt:
+        name: 
+          - x11-xserver-utils 
+        state: latest
+
+    - name: Install --no-install-recommends xserver-xorg
+      apt:
+        name: 
+          - xserver-xorg
+        install_recommends: no
+        state: latest
+
+    - name: Install xinit
+      apt:
+        name: 
+          - xinit
+        install_recommends: no
+        state: latest
+
+    - name: Install raspberrypi-ui-mods lxsession [Raspbian]
+      apt:
+        name: 
+          - raspberrypi-ui-mods 
+          - lxsession
+        install_recommends: no
+        state: latest
+      when: ansible_facts['architecture'] == "armv7l"
+
+    - name: Install lightdm
+      apt:
+        name:  
+          - lightdm
+        state: latest
+
+    - name: Install xdotool
+      apt:
+        name: 
+          - xdotool 
+        state: latest
+
+
+#########################################################################################
+# lightdm autologin
+
+    - name: Creates directory /etc/lightdm/lightdm.conf.d
+      file:
+        path: /etc/lightdm/lightdm.conf.d
+        state: directory
+
+    - name: Create autologin file
+      copy:
+        dest: /etc/lightdm/lightdm.conf.d/01_autologin.conf
+        content: |
+          [Seat:*]
+          autologin-user={{ user }}
+          autologin-user-timeout=0
+
+#########################################################################################
+# lightdm autostart
+
+    - name: Create lxsession directory for User {{ user }} [Debian]
+      become: yes
+      become_user: "{{ user }}"
+      file:
+        path: "/home/{{ user }}/.config/lxsession/LXDE"
+        state: directory
+      when: ansible_facts['architecture'] == "x86_64"
+
+    - name: Create lxsession File [Debian]
+      become: yes
+      become_user: "{{ user }}"
+      copy:
+        dest: "/home/{{ user }}/.config/lxsession/LXDE/autostart"
+        content: |
+          # @xscreensaver -no-splash
+          @xset s off
+          @xset -dpms
+          @xset s noblank
+          # @sed -i 's/"exited_cleanly": false/"exited_cleanly": true/' ~/.config/chromium/Default/Preferences
+          @sol
+      register: lxsession_autostart
+      when: ansible_facts['architecture'] == "x86_64"
+
+    - name: Create lxsession directory for User {{ user }} [Raspbian]
+      become: yes
+      become_user: "{{ user }}"
+      file:
+        path: "/home/{{ user }}/.config/lxsession/LXDE-pi"
+        state: directory
+      when: ansible_facts['architecture'] == "armv7l"    
+
+    - name: Create lxsession File [Raspbian]
+      become: yes
+      become_user: "{{ user }}"
+      copy:
+        dest: "/home/{{ user }}/.config/lxsession/LXDE-pi/autostart"
+        content: |
+          @xscreensaver -no-splash
+          @xset s off
+          @xset -dpms
+          @xset s noblank
+          # @sed -i 's/"exited_cleanly": false/"exited_cleanly": true/' ~/.config/chromium/Default/Preferences
+          @sol
+      register: lxsession_autostart
+      when: ansible_facts['architecture'] == "armv7l"
+
+
+    - name: Restart after configuration change
+      reboot:
+      when: lxsession_autostart.changed
+
+#########################################################################################
+# configure Wifi
+
+    - name: Create wpa_supplicant.conf File [Raspbian]
+      copy:
+        dest: "/etc/wpa_supplicant/wpa_supplicant.conf"
+        content: |
+          network={
+          ssid="{{wifi_ssid}}"
+          psk="{{wifi_password}}"
+          }
+        mode: u=rwX,g=rX,o=rX
+      register: configure_wifi
+      when: ansible_facts['architecture'] == "armv7l"
+
+    - name: Restart after Wifi configuration change
+      reboot:
+      when: configure_wifi.changed
+
+    - name: Restart
+      reboot:
